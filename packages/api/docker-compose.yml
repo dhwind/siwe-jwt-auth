@@ -1,12 +1,15 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
+  api:
+    build:
+      context: ../..
+      dockerfile: packages/api/Dockerfile
     ports:
       - '${PORT:-3000}:3000'
     env_file:
       - .env.production
+    command: sh -c "pnpm prisma:generate && pnpm prisma migrate deploy && pnpm start:prod"
     depends_on:
       postgres:
         condition: service_healthy
