@@ -1,7 +1,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { UserService } from '@/modules/main/user/user.service';
 import { ethers } from 'ethers';
-import { generateNonce, SiweMessage } from 'siwe';
+import { generateNonce, SiweMessage, SiweResponse } from 'siwe';
 import { SignInDTO } from './dto/sign-in.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -80,10 +80,19 @@ export class AuthService {
       throw new HttpException('Invalid nonce', HttpStatus.UNAUTHORIZED);
     }
 
-    const verifyResult = await siweMessage.verify({
-      signature: dto.signature,
-      nonce: user.nonce,
-    });
+    let verifyResult: SiweResponse | null = null;
+
+    try {
+      verifyResult = await siweMessage.verify({
+        signature: dto.signature,
+        nonce: user.nonce,
+      });
+    } catch (e) {
+      throw new HttpException(
+        'SIWE verification failed. Bad signature or nonce',
+        HttpStatus.UNAUTHORIZED
+      );
+    }
 
     if (!verifyResult.success) {
       throw new HttpException(
