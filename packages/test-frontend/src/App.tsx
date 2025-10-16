@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { SiweMessage } from "siwe";
 import "./App.css";
+import AuthorizedUserProfileABI from "./contracts/AuthorizedUserProfile.json";
 
 declare global {
   interface Window {
@@ -26,6 +27,9 @@ function App() {
   const [accessToken, setAccessToken] = useState<string>("");
   const [message, setMessage] = useState<Message>({ text: "", type: "info" });
   const [apiUrl, setApiUrl] = useState("http://localhost:3000");
+  const [contractAddress, setContractAddress] = useState(
+    "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+  );
   const [isConnected, setIsConnected] = useState(false);
 
   const addMessage = (
@@ -69,6 +73,8 @@ function App() {
       const web3Provider = new ethers.BrowserProvider(window.ethereum);
       const web3Signer = await web3Provider.getSigner();
       const address = await web3Signer.getAddress();
+
+      console.log("address", address);
 
       setSigner(web3Signer);
       setUserAddress(address);
@@ -180,31 +186,60 @@ function App() {
       throw new Error("No user data available. Please fetch user data first.");
     }
 
+    if (!signer) {
+      throw new Error("Please connect your wallet first.");
+    }
+
+    if (!accessToken) {
+      throw new Error("Please sign in first to get JWT token.");
+    }
+
     try {
-      const response = await fetch(`${apiUrl}/user/profile`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: userData.username,
-        }),
-      });
+      addMessage("Calling smart contract to update username...", "info");
 
-      const result = await response.json();
+      // Create contract instance
+      const contract = new ethers.Contract(
+        contractAddress,
+        AuthorizedUserProfileABI,
+        signer
+      );
 
-      if (response.ok) {
-        addMessage("✅ User data updated successfully!", "success");
-        setUserData(result);
+      // Call setUsername on the smart contract
+      // setUsername(address user, string memory jwt, string memory newUsername)
+      addMessage("Please confirm the transaction in MetaMask...", "info");
+
+      const tx = await contract.setUsername(
+        userAddress,
+        accessToken,
+        userData.username
+      );
+
+      addMessage("Transaction submitted! Waiting for confirmation...", "info");
+
+      // Wait for transaction to be mined
+      const receipt = await tx.wait();
+
+      addMessage(
+        `✅ Username updated on blockchain!<br/>Transaction: ${receipt.hash}<br/>Block: ${receipt.blockNumber}`,
+        "success"
+      );
+
+      // Refresh user data from backend after blockchain update
+      setTimeout(() => showUserData(), 2000);
+    } catch (error: any) {
+      if (error.code === "ACTION_REJECTED") {
+        addMessage("❌ Transaction rejected by user", "error");
+      } else if (error.message.includes("InvalidJwt")) {
+        addMessage(
+          "❌ Invalid JWT token. Please sign in again to get a fresh token.",
+          "error"
+        );
       } else {
         addMessage(
-          `❌ User data update failed: ${result.message || "Unknown error"}`,
+          `❌ Update username error: ${error.message || error}`,
           "error"
         );
       }
-    } catch (error: any) {
-      addMessage(`Update user data error: ${error.message}`, "error");
     }
   };
 
@@ -258,6 +293,7 @@ function App() {
       }
     };
     checkConnection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -355,14 +391,25 @@ function App() {
         </div>
 
         <div className="config">
-          <h3>API Configuration</h3>
-          <label htmlFor="apiUrl">Backend URL:</label>
-          <input
-            type="text"
-            id="apiUrl"
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-          />
+          <h3>Configuration</h3>
+          <div>
+            <label htmlFor="apiUrl">Backend URL:</label>
+            <input
+              type="text"
+              id="apiUrl"
+              value={apiUrl}
+              onChange={(e) => setApiUrl(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="contractAddress">Contract Address:</label>
+            <input
+              type="text"
+              id="contractAddress"
+              value={contractAddress}
+              onChange={(e) => setContractAddress(e.target.value)}
+            />
+          </div>
         </div>
 
         {accessToken && (

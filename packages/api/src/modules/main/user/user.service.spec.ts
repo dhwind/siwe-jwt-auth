@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UserService } from './user.service';
 import { OrmService } from '@/modules/common/orm/orm.service';
 import { User, Prisma } from 'generated/prisma';
+import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
 
 describe('UserService', () => {
   let service: UserService;

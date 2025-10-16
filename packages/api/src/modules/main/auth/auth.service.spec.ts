@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
@@ -8,6 +8,7 @@ import { SignInDTO } from './dto/sign-in.dto';
 import { User } from 'generated/prisma';
 import * as ethers from 'ethers';
 import * as siwe from 'siwe';
+import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
 
 jest.mock('ethers');
 jest.mock('siwe');
@@ -17,6 +18,7 @@ describe('AuthService', () => {
   let mockUserService: jest.Mocked<UserService>;
   let mockJwtService: jest.Mocked<JwtService>;
   let mockConfigService: jest.Mocked<ConfigService>;
+  let mockAuthorizedUserProfileService: jest.Mocked<AuthorizedUserProfileService>;
 
   const mockUser: User = {
     id: 'test-user-id',
@@ -28,6 +30,12 @@ describe('AuthService', () => {
   };
 
   beforeEach(async () => {
+    // Mock Logger static methods to suppress logs during tests
+    jest.spyOn(Logger, 'log').mockImplementation();
+    jest.spyOn(Logger, 'error').mockImplementation();
+    jest.spyOn(Logger, 'warn').mockImplementation();
+    jest.spyOn(Logger, 'debug').mockImplementation();
+
     mockUserService = {
       findUnique: jest.fn(),
       create: jest.fn(),
@@ -42,6 +50,11 @@ describe('AuthService', () => {
     mockConfigService = {
       getOrThrow: jest.fn(),
     } as unknown as jest.Mocked<ConfigService>;
+
+    mockAuthorizedUserProfileService = {
+      addJwtToContract: jest.fn(),
+      updateUsername: jest.fn(),
+    } as unknown as jest.Mocked<AuthorizedUserProfileService>;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -58,6 +71,10 @@ describe('AuthService', () => {
           provide: ConfigService,
           useValue: mockConfigService,
         },
+        {
+          provide: AuthorizedUserProfileService,
+          useValue: mockAuthorizedUserProfileService,
+        },
       ],
     }).compile();
 
@@ -66,6 +83,7 @@ describe('AuthService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    jest.restoreAllMocks();
   });
 
   describe('getNonce', () => {
@@ -347,7 +365,6 @@ describe('AuthService', () => {
   describe('refresh', () => {
     it('should throw error for invalid refresh token', async () => {
       const inputToken = 'invalid-token';
-      const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
       const mockError = new Error('Invalid token');
       mockJwtService.verifyAsync.mockRejectedValue(mockError);
       mockConfigService.getOrThrow.mockReturnValue('refresh-secret');
@@ -363,8 +380,6 @@ describe('AuthService', () => {
       expect(mockConfigService.getOrThrow).toHaveBeenCalledWith(
         'jwt.refreshSecret'
       );
-      expect(consoleLogSpy).toHaveBeenCalledWith(mockError);
-      consoleLogSpy.mockRestore();
     });
 
     it('should successfully refresh and return new access token', async () => {

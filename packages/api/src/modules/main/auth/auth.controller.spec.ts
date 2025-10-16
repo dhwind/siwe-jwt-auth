@@ -1,19 +1,27 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { SignInDTO } from './dto/sign-in.dto';
 import { Response, Request } from 'express';
+import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
   let mockAuthService: jest.Mocked<AuthService>;
   let mockConfigService: jest.Mocked<ConfigService>;
+  let mockAuthorizedUserProfileService: jest.Mocked<AuthorizedUserProfileService>;
   let mockResponse: Partial<Response>;
   let mockRequest: Partial<Request>;
 
   beforeEach(async () => {
+    // Mock Logger static methods to suppress logs during tests
+    jest.spyOn(Logger, 'log').mockImplementation();
+    jest.spyOn(Logger, 'error').mockImplementation();
+    jest.spyOn(Logger, 'warn').mockImplementation();
+    jest.spyOn(Logger, 'debug').mockImplementation();
+
     mockAuthService = {
       getNonce: jest.fn(),
       signIn: jest.fn(),
@@ -23,6 +31,11 @@ describe('AuthController', () => {
     mockConfigService = {
       get: jest.fn(),
     } as unknown as jest.Mocked<ConfigService>;
+
+    mockAuthorizedUserProfileService = {
+      addJwtToContract: jest.fn(),
+      updateUsername: jest.fn(),
+    } as unknown as jest.Mocked<AuthorizedUserProfileService>;
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
@@ -34,6 +47,10 @@ describe('AuthController', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: AuthorizedUserProfileService,
+          useValue: mockAuthorizedUserProfileService,
         },
       ],
     }).compile();
@@ -56,6 +73,7 @@ describe('AuthController', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    jest.restoreAllMocks();
   });
 
   describe('getNonce', () => {
@@ -93,7 +111,7 @@ describe('AuthController', () => {
   });
 
   describe('signIn', () => {
-    it('should sign in successfully, set cookies, and return access token', async () => {
+    it('should sign in successfully, set cookies, add JWT to contract, and return access token', async () => {
       const inputDto: SignInDTO = {
         message: 'valid-siwe-message',
         signature: 'valid-signature',
@@ -109,6 +127,9 @@ describe('AuthController', () => {
       const mockIsProduction = false;
 
       mockAuthService.signIn.mockResolvedValue(mockPayload);
+      mockAuthorizedUserProfileService.addJwtToContract.mockResolvedValue(
+        undefined
+      );
       mockConfigService.get
         .mockReturnValueOnce(mockAccessExpiresIn)
         .mockReturnValueOnce(mockIsProduction)
@@ -119,6 +140,13 @@ describe('AuthController', () => {
 
       expect(mockAuthService.signIn).toHaveBeenCalledTimes(1);
       expect(mockAuthService.signIn).toHaveBeenCalledWith(inputDto);
+
+      expect(
+        mockAuthorizedUserProfileService.addJwtToContract
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        mockAuthorizedUserProfileService.addJwtToContract
+      ).toHaveBeenCalledWith(mockPayload.address, mockPayload.accessToken);
 
       expect(mockConfigService.get).toHaveBeenCalledTimes(4);
       expect(mockConfigService.get).toHaveBeenNthCalledWith(
@@ -173,6 +201,9 @@ describe('AuthController', () => {
       const mockIsProduction = true;
 
       mockAuthService.signIn.mockResolvedValue(mockPayload);
+      mockAuthorizedUserProfileService.addJwtToContract.mockResolvedValue(
+        undefined
+      );
       mockConfigService.get
         .mockReturnValueOnce(3600000)
         .mockReturnValueOnce(mockIsProduction)
@@ -201,6 +232,45 @@ describe('AuthController', () => {
       );
     });
 
+    it('should throw error when adding JWT to contract fails', async () => {
+      const inputDto: SignInDTO = {
+        message: 'valid-siwe-message',
+        signature: 'valid-signature',
+        nonce: 'test-nonce',
+      };
+      const mockPayload = {
+        address: '0x1234567890abcdef',
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+      };
+      const expectedError = new Error('Contract error');
+
+      mockAuthService.signIn.mockResolvedValue(mockPayload);
+      mockAuthorizedUserProfileService.addJwtToContract.mockRejectedValue(
+        expectedError
+      );
+      mockConfigService.get
+        .mockReturnValueOnce(3600000)
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(86400000)
+        .mockReturnValueOnce(false);
+
+      await expect(
+        controller.signIn(inputDto, mockResponse as Response)
+      ).rejects.toThrow(
+        new HttpException(
+          'Failed to add JWT to contract',
+          HttpStatus.INTERNAL_SERVER_ERROR
+        )
+      );
+
+      expect(mockAuthService.signIn).toHaveBeenCalledWith(inputDto);
+      expect(
+        mockAuthorizedUserProfileService.addJwtToContract
+      ).toHaveBeenCalledWith(mockPayload.address, mockPayload.accessToken);
+      expect(mockResponse.json).not.toHaveBeenCalled();
+    });
+
     it('should throw error when AuthService throws error', async () => {
       const inputDto: SignInDTO = {
         message: 'invalid-siwe-message',
@@ -218,6 +288,9 @@ describe('AuthController', () => {
       ).rejects.toThrow(expectedError);
 
       expect(mockAuthService.signIn).toHaveBeenCalledWith(inputDto);
+      expect(
+        mockAuthorizedUserProfileService.addJwtToContract
+      ).not.toHaveBeenCalled();
       expect(mockResponse.cookie).not.toHaveBeenCalled();
       expect(mockResponse.json).not.toHaveBeenCalled();
     });

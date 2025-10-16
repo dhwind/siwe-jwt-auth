@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { UserService } from '@/modules/main/user/user.service';
 import { ethers } from 'ethers';
 import { generateNonce, SiweMessage, SiweResponse } from 'siwe';
@@ -144,7 +144,7 @@ export class AuthService {
 
       return { accessToken };
     } catch (e) {
-      console.log(e);
+      Logger.error(e);
       throw new HttpException('Invalid refresh token', HttpStatus.UNAUTHORIZED);
     }
   }

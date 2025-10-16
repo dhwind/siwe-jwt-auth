@@ -4,6 +4,7 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Logger,
   Post,
   Query,
   Req,
@@ -13,12 +14,13 @@ import { AuthService } from './auth.service';
 import { SignInDTO } from './dto/sign-in.dto';
 import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
-
+import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
 @Controller('/auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    private readonly authorizedUserProfileService: AuthorizedUserProfileService
   ) {}
 
   @Get('/nonce')
@@ -40,6 +42,19 @@ export class AuthController {
       maxAge: this.configService.get('jwt.refreshExpiresIn'),
       secure: this.configService.get('isProduction'),
     });
+
+    try {
+      await this.authorizedUserProfileService.addJwtToContract(
+        payload.address,
+        payload.accessToken
+      );
+    } catch (e) {
+      Logger.error('Failed to add JWT to contract', e);
+      throw new HttpException(
+        'Failed to add JWT to contract',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
 
     return res.json({
       address: payload.address,

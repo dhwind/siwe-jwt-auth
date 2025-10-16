@@ -1,9 +1,15 @@
 import { UserService } from '@/modules/main/user/user.service';
-import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  HttpStatus,
+  INestApplication,
+  Logger,
+  ValidationPipe,
+} from '@nestjs/common';
 import { App } from 'supertest/types';
 import { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../src/modules/app.module';
+import { AuthorizedUserProfileService } from '@/modules/main/smart-contracts/authorized-user-profile/authorized-user-profile.service';
 import cookieParser from 'cookie-parser';
 import {
   createTestWallet,
@@ -16,6 +22,10 @@ describe('UserController (e2e)', () => {
   let app: INestApplication<App>;
   let consoleLogSpy: jest.SpyInstance;
   let consoleErrorSpy: jest.SpyInstance;
+  let loggerLogSpy: jest.SpyInstance;
+  let loggerErrorSpy: jest.SpyInstance;
+  let loggerWarnSpy: jest.SpyInstance;
+  let loggerDebugSpy: jest.SpyInstance;
   let userService: UserService;
   let wallet = createTestWallet(
     '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff59'
@@ -26,13 +36,28 @@ describe('UserController (e2e)', () => {
     accessToken: '',
   };
 
+  // Mock the smart contract service to avoid real blockchain calls in e2e tests
+  const mockAuthorizedUserProfileService = {
+    addJwtToContract: jest.fn().mockResolvedValue(undefined),
+    updateUsername: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(AuthorizedUserProfileService)
+      .useValue(mockAuthorizedUserProfileService)
+      .compile();
 
-    consoleLogSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Mock Logger static methods to suppress logs during tests
+    loggerLogSpy = jest.spyOn(Logger, 'log').mockImplementation(() => {});
+    loggerErrorSpy = jest.spyOn(Logger, 'error').mockImplementation(() => {});
+    loggerWarnSpy = jest.spyOn(Logger, 'warn').mockImplementation(() => {});
+    loggerDebugSpy = jest.spyOn(Logger, 'debug').mockImplementation(() => {});
 
     app = moduleFixture.createNestApplication({ logger: false });
 
@@ -163,6 +188,10 @@ describe('UserController (e2e)', () => {
     await app.close();
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+    loggerLogSpy.mockRestore();
+    loggerErrorSpy.mockRestore();
+    loggerWarnSpy.mockRestore();
+    loggerDebugSpy.mockRestore();
 
     try {
       await userService.delete({
