@@ -17,6 +17,7 @@ import {
 } from './helpers/siwe-test-helper';
 import { UserService } from '@/modules/main/user/user.service';
 import { AuthorizedUserProfileService } from '@/modules/main/smart-contracts/authorized-user-profile/authorized-user-profile.service';
+import { RedisService } from '@/modules/common/redis/redis.service';
 import cookieParser from 'cookie-parser';
 
 describe('AuthController (e2e)', () => {
@@ -38,12 +39,31 @@ describe('AuthController (e2e)', () => {
     updateUsername: jest.fn().mockResolvedValue(undefined),
   };
 
+  // Mock Redis service for e2e tests with in-memory storage
+  const redisStorage = new Map<string, string>();
+  const mockRedisService = {
+    set: jest.fn((key: string, value: string) => {
+      redisStorage.set(key, value);
+      return Promise.resolve(undefined);
+    }),
+    get: jest.fn((key: string) => {
+      return Promise.resolve(redisStorage.get(key) || null);
+    }),
+    delete: jest.fn((...keys: string[]) => {
+      keys.forEach((key) => redisStorage.delete(key));
+      return Promise.resolve(undefined);
+    }),
+    keys: jest.fn().mockResolvedValue([]),
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
       .overrideProvider(AuthorizedUserProfileService)
       .useValue(mockAuthorizedUserProfileService)
+      .overrideProvider(RedisService)
+      .useValue(mockRedisService)
       .compile();
 
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});

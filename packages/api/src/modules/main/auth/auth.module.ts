@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './strategy/jwt.strategy';
 import { AuthorizedUserProfileModule } from '../smart-contracts/authorized-user-profile/authorized-user-profile.module';
+import { RedisModule } from '@/modules/common/redis/redis.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AuthorizedUserProfileModule } from '../smart-contracts/authorized-user-
     PassportModule,
     JwtModule,
     AuthorizedUserProfileModule,
+    RedisModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

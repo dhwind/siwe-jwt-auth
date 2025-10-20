@@ -15,12 +15,14 @@ import { SignInDTO } from './dto/sign-in.dto';
 import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
+import { JwtService } from '@nestjs/jwt';
 @Controller('/auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
-    private readonly authorizedUserProfileService: AuthorizedUserProfileService
+    private readonly authorizedUserProfileService: AuthorizedUserProfileService,
+    private readonly jwtService: JwtService
   ) {}
 
   @Get('/nonce')
@@ -65,6 +67,7 @@ export class AuthController {
   @Post('/refresh')
   async refresh(@Req() req: Request, @Res() res: Response) {
     const refreshToken = req.cookies['refreshToken'];
+    const oldAccessToken = req.cookies['accessToken'];
 
     if (!refreshToken) {
       throw new HttpException(
@@ -73,7 +76,10 @@ export class AuthController {
       );
     }
 
-    const payload = await this.authService.refresh(refreshToken);
+    const payload = await this.authService.refresh(
+      refreshToken,
+      oldAccessToken
+    );
 
     res.cookie('accessToken', payload.accessToken, {
       maxAge: this.configService.get('jwt.accessExpiresIn'),
@@ -86,8 +92,24 @@ export class AuthController {
   }
 
   @Post('/sign-out')
-  async signOut(@Res() res: Response) {
+  async signOut(@Req() req: Request, @Res() res: Response) {
     try {
+      // Extract user address from JWT in cookie
+      const accessToken = req.cookies['accessToken'];
+      if (accessToken) {
+        try {
+          const decoded = await this.jwtService.verifyAsync(accessToken, {
+            secret: this.configService.getOrThrow<string>('jwt.accessSecret'),
+          });
+          if (decoded?.publicAddress) {
+            await this.authService.signOut(decoded.publicAddress);
+          }
+        } catch (e) {
+          // Token might be expired or invalid, just clear cookies
+          Logger.error('Error decoding token during sign out', e);
+        }
+      }
+
       res.clearCookie('accessToken');
       res.clearCookie('refreshToken');
 

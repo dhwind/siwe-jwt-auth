@@ -14,6 +14,11 @@ export default () => ({
     refreshSecret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
     refreshExpiresIn: parseDuration(process.env.JWT_REFRESH_EXPIRES_IN || '7d'),
   },
+  redis: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+    password: process.env.REDIS_PASSWORD,
+  },
   contracts: {
     authorizedUserProfile: {
       ...smartContracts.AuthorizedUserProfile,

@@ -6,12 +6,14 @@ import { AuthService } from './auth.service';
 import { SignInDTO } from './dto/sign-in.dto';
 import { Response, Request } from 'express';
 import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
+import { JwtService } from '@nestjs/jwt';
 
 describe('AuthController', () => {
   let controller: AuthController;
   let mockAuthService: jest.Mocked<AuthService>;
   let mockConfigService: jest.Mocked<ConfigService>;
   let mockAuthorizedUserProfileService: jest.Mocked<AuthorizedUserProfileService>;
+  let mockJwtService: jest.Mocked<JwtService>;
   let mockResponse: Partial<Response>;
   let mockRequest: Partial<Request>;
 
@@ -37,6 +39,11 @@ describe('AuthController', () => {
       updateUsername: jest.fn(),
     } as unknown as jest.Mocked<AuthorizedUserProfileService>;
 
+    mockJwtService = {
+      verifyAsync: jest.fn(),
+      signAsync: jest.fn(),
+    } as unknown as jest.Mocked<JwtService>;
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
       providers: [
@@ -51,6 +58,10 @@ describe('AuthController', () => {
         {
           provide: AuthorizedUserProfileService,
           useValue: mockAuthorizedUserProfileService,
+        },
+        {
+          provide: JwtService,
+          useValue: mockJwtService,
         },
       ],
     }).compile();
@@ -299,13 +310,17 @@ describe('AuthController', () => {
   describe('refresh', () => {
     it('should refresh token successfully and set new access token cookie', async () => {
       const mockRefreshToken = 'valid-refresh-token';
+      const mockOldAccessToken = 'old-access-token';
       const mockPayload = {
         accessToken: 'new-access-token',
       };
       const mockAccessExpiresIn = 3600000;
       const mockIsProduction = false;
 
-      mockRequest.cookies = { refreshToken: mockRefreshToken };
+      mockRequest.cookies = {
+        refreshToken: mockRefreshToken,
+        accessToken: mockOldAccessToken,
+      };
       mockAuthService.refresh.mockResolvedValue(mockPayload);
       mockConfigService.get
         .mockReturnValueOnce(mockAccessExpiresIn)
@@ -317,7 +332,10 @@ describe('AuthController', () => {
       );
 
       expect(mockAuthService.refresh).toHaveBeenCalledTimes(1);
-      expect(mockAuthService.refresh).toHaveBeenCalledWith(mockRefreshToken);
+      expect(mockAuthService.refresh).toHaveBeenCalledWith(
+        mockRefreshToken,
+        mockOldAccessToken
+      );
 
       expect(mockConfigService.get).toHaveBeenCalledTimes(2);
       expect(mockConfigService.get).toHaveBeenNthCalledWith(
@@ -373,7 +391,10 @@ describe('AuthController', () => {
         controller.refresh(mockRequest as Request, mockResponse as Response)
       ).rejects.toThrow(expectedError);
 
-      expect(mockAuthService.refresh).toHaveBeenCalledWith(mockRefreshToken);
+      expect(mockAuthService.refresh).toHaveBeenCalledWith(
+        mockRefreshToken,
+        undefined
+      );
       expect(mockResponse.cookie).not.toHaveBeenCalled();
       expect(mockResponse.json).not.toHaveBeenCalled();
     });
@@ -381,8 +402,21 @@ describe('AuthController', () => {
 
   describe('signOut', () => {
     it('should clear cookies and return NO_CONTENT status', async () => {
-      await controller.signOut(mockResponse as Response);
+      mockRequest.cookies = { accessToken: 'valid-token' };
+      mockJwtService.verifyAsync.mockResolvedValue({
+        publicAddress: '0x1234567890abcdef',
+      });
+      mockConfigService.getOrThrow = jest.fn().mockReturnValue('test-secret');
+      mockAuthService.signOut = jest.fn().mockResolvedValue(undefined);
 
+      await controller.signOut(
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('valid-token', {
+        secret: 'test-secret',
+      });
       expect(mockResponse.clearCookie).toHaveBeenCalledTimes(2);
       expect(mockResponse.clearCookie).toHaveBeenNthCalledWith(
         1,
@@ -397,16 +431,32 @@ describe('AuthController', () => {
       expect(mockResponse.sendStatus).toHaveBeenCalledWith(
         HttpStatus.NO_CONTENT
       );
+      expect(mockAuthService.signOut).toHaveBeenCalledWith(
+        '0x1234567890abcdef'
+      );
+    });
+
+    it('should clear cookies even when no access token present', async () => {
+      mockRequest.cookies = {};
+
+      await controller.signOut(
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.clearCookie).toHaveBeenCalledTimes(2);
+      expect(mockResponse.sendStatus).toHaveBeenCalledTimes(1);
     });
 
     it('should throw error when clearing cookies fails', async () => {
+      mockRequest.cookies = {};
       const expectedError = new Error('Cookie clear failed');
       mockResponse.clearCookie = jest.fn().mockImplementation(() => {
         throw expectedError;
       });
 
       await expect(
-        controller.signOut(mockResponse as Response)
+        controller.signOut(mockRequest as Request, mockResponse as Response)
       ).rejects.toThrow(
         new HttpException(
           'Failed to sign out',

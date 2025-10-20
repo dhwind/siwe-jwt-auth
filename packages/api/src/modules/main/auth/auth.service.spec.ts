@@ -9,6 +9,7 @@ import { User } from 'generated/prisma';
 import * as ethers from 'ethers';
 import * as siwe from 'siwe';
 import { AuthorizedUserProfileService } from '../smart-contracts/authorized-user-profile/authorized-user-profile.service';
+import { RedisService } from '@/modules/common/redis/redis.service';
 
 jest.mock('ethers');
 jest.mock('siwe');
@@ -19,6 +20,7 @@ describe('AuthService', () => {
   let mockJwtService: jest.Mocked<JwtService>;
   let mockConfigService: jest.Mocked<ConfigService>;
   let mockAuthorizedUserProfileService: jest.Mocked<AuthorizedUserProfileService>;
+  let mockRedisService: jest.Mocked<RedisService>;
 
   const mockUser: User = {
     id: 'test-user-id',
@@ -48,13 +50,29 @@ describe('AuthService', () => {
     } as unknown as jest.Mocked<JwtService>;
 
     mockConfigService = {
-      getOrThrow: jest.fn(),
+      getOrThrow: jest.fn((key: string) => {
+        const configMap: Record<string, string | number> = {
+          'jwt.accessSecret': 'access-secret',
+          'jwt.refreshSecret': 'refresh-secret',
+          'jwt.accessExpiresIn': 3600000,
+          'jwt.refreshExpiresIn': 7200000,
+        };
+        return configMap[key];
+      }),
     } as unknown as jest.Mocked<ConfigService>;
 
     mockAuthorizedUserProfileService = {
       addJwtToContract: jest.fn(),
       updateUsername: jest.fn(),
     } as unknown as jest.Mocked<AuthorizedUserProfileService>;
+
+    mockRedisService = {
+      set: jest.fn(),
+      get: jest.fn(),
+      exists: jest.fn(),
+      delete: jest.fn(),
+      keys: jest.fn(),
+    } as unknown as jest.Mocked<RedisService>;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -74,6 +92,10 @@ describe('AuthService', () => {
         {
           provide: AuthorizedUserProfileService,
           useValue: mockAuthorizedUserProfileService,
+        },
+        {
+          provide: RedisService,
+          useValue: mockRedisService,
         },
       ],
     }).compile();
@@ -303,11 +325,7 @@ describe('AuthService', () => {
       mockJwtService.signAsync
         .mockResolvedValueOnce(mockAccessToken)
         .mockResolvedValueOnce(mockRefreshToken);
-      mockConfigService.getOrThrow
-        .mockReturnValueOnce('access-secret')
-        .mockReturnValueOnce(3600)
-        .mockReturnValueOnce('refresh-secret')
-        .mockReturnValueOnce(86400);
+      mockRedisService.set.mockResolvedValue();
 
       const actualResult = await service.signIn(inputDto);
 
@@ -326,7 +344,7 @@ describe('AuthService', () => {
         { ...mockUser },
         {
           secret: 'access-secret',
-          expiresIn: 3600,
+          expiresIn: 3600000,
         }
       );
       expect(mockJwtService.signAsync).toHaveBeenNthCalledWith(
@@ -334,25 +352,20 @@ describe('AuthService', () => {
         { ...mockUser },
         {
           secret: 'refresh-secret',
-          expiresIn: 86400,
+          expiresIn: 7200000,
         }
       );
-      expect(mockConfigService.getOrThrow).toHaveBeenCalledTimes(4);
-      expect(mockConfigService.getOrThrow).toHaveBeenNthCalledWith(
-        1,
-        'jwt.accessSecret'
+
+      // Verify Redis operations - tokens stored as values
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        `access:${mockAddress}`,
+        mockAccessToken,
+        3600 // TTL in seconds
       );
-      expect(mockConfigService.getOrThrow).toHaveBeenNthCalledWith(
-        2,
-        'jwt.accessExpiresIn'
-      );
-      expect(mockConfigService.getOrThrow).toHaveBeenNthCalledWith(
-        3,
-        'jwt.refreshSecret'
-      );
-      expect(mockConfigService.getOrThrow).toHaveBeenNthCalledWith(
-        4,
-        'jwt.refreshExpiresIn'
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        `refresh:${mockAddress}`,
+        mockRefreshToken,
+        7200 // TTL in seconds
       );
       expect(actualResult).toEqual({
         address: mockAddress,
@@ -367,7 +380,6 @@ describe('AuthService', () => {
       const inputToken = 'invalid-token';
       const mockError = new Error('Invalid token');
       mockJwtService.verifyAsync.mockRejectedValue(mockError);
-      mockConfigService.getOrThrow.mockReturnValue('refresh-secret');
 
       await expect(service.refresh(inputToken)).rejects.toThrow(
         new HttpException('Invalid refresh token', HttpStatus.UNAUTHORIZED)
@@ -377,13 +389,11 @@ describe('AuthService', () => {
       expect(mockJwtService.verifyAsync).toHaveBeenCalledWith(inputToken, {
         secret: 'refresh-secret',
       });
-      expect(mockConfigService.getOrThrow).toHaveBeenCalledWith(
-        'jwt.refreshSecret'
-      );
     });
 
     it('should successfully refresh and return new access token', async () => {
       const inputToken = 'valid-refresh-token';
+      const oldAccessToken = 'old-access-token';
       const mockDecodedToken = {
         id: mockUser.id,
         publicAddress: mockUser.publicAddress,
@@ -395,19 +405,20 @@ describe('AuthService', () => {
         exp: 1234567999,
       };
       mockJwtService.verifyAsync.mockResolvedValue(mockDecodedToken);
-      mockConfigService.getOrThrow
-        .mockReturnValueOnce('refresh-secret')
-        .mockReturnValueOnce('access-secret')
-        .mockReturnValueOnce(3600);
       const mockAccessToken = 'new-access-token';
       mockJwtService.signAsync.mockResolvedValue(mockAccessToken);
+      mockRedisService.get.mockResolvedValue(inputToken); // Stored refresh token
+      mockRedisService.set.mockResolvedValue();
 
-      const actualResult = await service.refresh(inputToken);
+      const actualResult = await service.refresh(inputToken, oldAccessToken);
 
       expect(mockJwtService.verifyAsync).toHaveBeenCalledTimes(1);
       expect(mockJwtService.verifyAsync).toHaveBeenCalledWith(inputToken, {
         secret: 'refresh-secret',
       });
+      expect(mockRedisService.get).toHaveBeenCalledWith(
+        `refresh:${mockUser.publicAddress}`
+      );
       expect(mockJwtService.signAsync).toHaveBeenCalledTimes(1);
       expect(mockJwtService.signAsync).toHaveBeenCalledWith(
         {
@@ -420,12 +431,71 @@ describe('AuthService', () => {
         },
         {
           secret: 'access-secret',
-          expiresIn: 3600,
+          expiresIn: 3600000,
         }
+      );
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        `access:${mockUser.publicAddress}`,
+        mockAccessToken,
+        3600 // TTL in seconds
       );
       expect(actualResult).toEqual({
         accessToken: mockAccessToken,
       });
+    });
+
+    it('should throw error when refresh token not in Redis', async () => {
+      const inputToken = 'valid-refresh-token';
+      const mockDecodedToken = {
+        id: mockUser.id,
+        publicAddress: mockUser.publicAddress,
+        iat: 1234567890,
+        exp: 1234567999,
+      };
+      mockJwtService.verifyAsync.mockResolvedValue(mockDecodedToken);
+      mockConfigService.getOrThrow.mockReturnValueOnce('refresh-secret');
+      mockRedisService.get.mockResolvedValue(null); // No token in Redis
+
+      await expect(service.refresh(inputToken)).rejects.toThrow(
+        new HttpException(
+          'Refresh token not found or expired',
+          HttpStatus.UNAUTHORIZED
+        )
+      );
+    });
+
+    it('should throw error when refresh token does not match', async () => {
+      const inputToken = 'valid-refresh-token';
+      const differentToken = 'different-refresh-token';
+      const mockDecodedToken = {
+        id: mockUser.id,
+        publicAddress: mockUser.publicAddress,
+        iat: 1234567890,
+        exp: 1234567999,
+      };
+      mockJwtService.verifyAsync.mockResolvedValue(mockDecodedToken);
+      mockConfigService.getOrThrow.mockReturnValueOnce('refresh-secret');
+      mockRedisService.get.mockResolvedValue(differentToken); // Different token
+
+      await expect(service.refresh(inputToken)).rejects.toThrow(
+        new HttpException(
+          'Refresh token not found or expired',
+          HttpStatus.UNAUTHORIZED
+        )
+      );
+    });
+  });
+
+  describe('signOut', () => {
+    it('should remove both tokens from Redis', async () => {
+      mockRedisService.delete.mockResolvedValue();
+
+      await service.signOut(mockUser.publicAddress);
+
+      expect(mockRedisService.delete).toHaveBeenCalledWith(
+        `access:${mockUser.publicAddress}`,
+        `refresh:${mockUser.publicAddress}`
+      );
     });
   });
 });
